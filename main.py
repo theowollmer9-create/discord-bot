@@ -28,7 +28,7 @@ tat TEXT
 c.execute("""CREATE TABLE IF NOT EXISTS kennzeichen (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 roblox_user TEXT,
-kennzeichen TEXT UNIQUE,
+kennzeichen TEXT,
 fahrzeug TEXT
 )""")
 
@@ -36,23 +36,20 @@ c.execute("""CREATE TABLE IF NOT EXISTS arbeiter_akten (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 name TEXT,
 job TEXT,
-eintrag TEXT,
-erstellt_von TEXT
+eintrag TEXT
 )""")
 
 c.execute("""CREATE TABLE IF NOT EXISTS bewerbungen (
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 discord_user TEXT,
 roblox_user TEXT,
-motivation TEXT,
-erfahrung TEXT,
 status TEXT DEFAULT 'OFFEN'
 )""")
 
 conn.commit()
 
 # =========================
-# ROLES CHECK
+# ROLES
 # =========================
 def is_fuehrung(member):
     return any(r.name in [
@@ -66,18 +63,18 @@ def is_agent(member):
     return discord.utils.get(member.roles, name="⚙️ Agent")
 
 # =========================
+# VALID KENNZEICHEN
+# =========================
+def valid_kz(kz):
+    return re.fullmatch(r"[A-Z]{4}-\d{2}", kz)
+
+# =========================
 # SUPPORT CHANNELS
 # =========================
 SUPPORT_CHANNELS = [
 "📨・SUPPORT 1","📨・SUPPORT 2","📨・SUPPORT 3","📨・SUPPORT 4","📨・SUPPORT 5",
 "📨・SUPPORT 6","📨・SUPPORT 7","📨・SUPPORT 8","📨・SUPPORT 9","📨・SUPPORT 10"
 ]
-
-# =========================
-# VALID KENNZEICHEN
-# =========================
-def valid_kz(kz):
-    return re.fullmatch(r"[A-Z]{4}-\d{2}", kz)
 
 # =========================
 # VERIFY SYSTEM
@@ -91,7 +88,8 @@ class VerifyView(discord.ui.View):
 
         role = discord.utils.get(interaction.guild.roles, name="⚙️ Agent")
 
-        await interaction.user.add_roles(role)
+        if role:
+            await interaction.user.add_roles(role)
 
         await interaction.response.send_message("✅ Verifiziert", ephemeral=True)
 
@@ -99,11 +97,13 @@ class VerifyView(discord.ui.View):
 # TICKET SYSTEM
 # =========================
 class CloseTicket(discord.ui.View):
+
     @discord.ui.button(label="❌ Schließen", style=discord.ButtonStyle.red)
     async def close(self, interaction, button):
         await interaction.channel.delete()
 
 class TicketSystem(discord.ui.View):
+
     @discord.ui.button(label="🎫 Ticket erstellen", style=discord.ButtonStyle.green)
     async def ticket(self, interaction, button):
 
@@ -114,14 +114,14 @@ class TicketSystem(discord.ui.View):
             interaction.user: discord.PermissionOverwrite(view_channel=True)
         }
 
-        ch = await interaction.guild.create_text_channel(
+        channel = await interaction.guild.create_text_channel(
             name=f"ticket-{interaction.user.name}",
             category=category,
             overwrites=overwrites
         )
 
-        await ch.send("🎫 Ticket erstellt", view=CloseTicket())
-        await interaction.response.send_message("Erstellt", ephemeral=True)
+        await channel.send("🎫 Ticket erstellt", view=CloseTicket())
+        await interaction.response.send_message("✔ Ticket erstellt", ephemeral=True)
 
 # =========================
 # AKTEN
@@ -143,13 +143,11 @@ async def akte(interaction, roblox_user: str):
 @bot.tree.command(name="kennzeichen")
 async def kennzeichen(interaction, roblox_user: str, kz: str, fahrzeug: str):
 
-    kz = kz.upper()
-
     if not valid_kz(kz):
         return await interaction.response.send_message("❌ AAAA-00 Format!", ephemeral=True)
 
     c.execute("INSERT INTO kennzeichen VALUES (NULL,?,?,?)",
-              (roblox_user, kz, fahrzeug))
+              (roblox_user, kz.upper(), fahrzeug))
     conn.commit()
 
     await interaction.response.send_message("🚗 gespeichert", ephemeral=True)
@@ -163,11 +161,8 @@ async def arbeiter(interaction, name: str, job: str, eintrag: str):
     if not is_agent(interaction.user):
         return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
 
-    c.execute("""
-    INSERT INTO arbeiter_akten (name, job, eintrag, erstellt_von)
-    VALUES (?,?,?,?)
-    """, (name, job, eintrag, str(interaction.user)))
-
+    c.execute("INSERT INTO arbeiter_akten VALUES (NULL,?,?,?)",
+              (name, job, eintrag))
     conn.commit()
 
     await interaction.response.send_message("👷 erstellt", ephemeral=True)
@@ -204,7 +199,7 @@ async def dashboard(interaction):
     c.execute("SELECT COUNT(*) FROM arbeiter_akten")
     worker = c.fetchone()[0]
 
-    embed = discord.Embed(title="📡 DASHBOARD", color=discord.Color.dark_red())
+    embed = discord.Embed(title="📡 DASHBOARD")
 
     embed.add_field(name="Akten", value=akten)
     embed.add_field(name="Kennzeichen", value=kz)
@@ -213,108 +208,94 @@ async def dashboard(interaction):
     await interaction.response.send_message(embed=embed)
 
 # =========================
-# STRAFKATALOG
+# 📁 KANAL ERSTELLEN
 # =========================
 @bot.tree.command(name="kanal_erstellen")
-async def kanal(interaction):
+async def kanal_erstellen(interaction, name: str, emoji: str):
 
-    ch = await interaction.guild.create_text_channel("📜・strafkatalog")
+    if not is_fuehrung(interaction.user):
+        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
 
-    embed = discord.Embed(
-        title="𝗦𝗧𝗥𝗔𝗙 𝗞𝗔𝗧𝗔𝗟𝗢𝗚 ⚖️",
-        description="🟢 Verwarnung\n🟡 Geldstrafe\n🔴 Haft\n⚫ Staatsfeind",
-        color=discord.Color.orange()
-    )
+    channel_name = f"{emoji} 𝗕𝗘𝗥𝗘𝗜𝗖𝗛 | {name.upper()}"
 
-    await ch.send(embed=embed)
+    await interaction.guild.create_text_channel(name=channel_name)
 
-    await interaction.response.send_message("📜 erstellt", ephemeral=True)
+    await interaction.response.send_message(f"✔ {channel_name} erstellt", ephemeral=True)
+
+# =========================
+# 📂 KATEGORIE ERSTELLEN
+# =========================
+@bot.tree.command(name="kategorie_erstellen")
+async def kategorie_erstellen(interaction, name: str, emoji: str):
+
+    if not is_fuehrung(interaction.user):
+        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+
+    cat_name = f"{emoji} | 𝗕𝗘𝗥𝗘𝗜𝗖𝗛 {name.upper()}"
+
+    await interaction.guild.create_category(name=cat_name)
+
+    await interaction.response.send_message(f"✔ {cat_name} erstellt", ephemeral=True)
 
 # =========================
 # =========================
-# 🗳️ BEWERBUNG SYSTEM MIT BUTTONS
+# 🆘 SUPPORT SYSTEM (FIXED & FULL)
 # =========================
 # =========================
 
-class BewerbungActionView(discord.ui.View):
+@bot.tree.command(name="support_öffnen")
+async def support_öffnen(interaction):
 
-    def __init__(self, user):
-        super().__init__()
-        self.user = user
+    if not is_agent(interaction.user):
+        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
 
-    @discord.ui.button(label="✅ Annehmen", style=discord.ButtonStyle.green)
-    async def accept(self, interaction, button):
+    for name in SUPPORT_CHANNELS:
+        ch = discord.utils.get(interaction.guild.text_channels, name=name)
 
-        if not is_fuehrung(interaction.user):
-            return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+        if ch:
+            embed = discord.Embed(
+                title="🆘 SUPPORT GEÖFFNET",
+                description=f"👤 {interaction.user.mention}",
+                color=discord.Color.orange()
+            )
+            await ch.send(embed=embed)
+            return await interaction.response.send_message("✔ Support geöffnet", ephemeral=True)
 
-        role = discord.utils.get(interaction.guild.roles, name="⚙️ Agent")
+    await interaction.response.send_message("❌ Kein Support frei", ephemeral=True)
 
-        member = discord.utils.get(interaction.guild.members, name=self.user)
+@bot.tree.command(name="support_schließen")
+async def support_schließen(interaction):
 
-        if member:
-            await member.add_roles(role)
+    if not is_fuehrung(interaction.user):
+        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
 
-        c.execute("UPDATE bewerbungen SET status='ANGENOMMEN' WHERE discord_user=?",
-                  (self.user,))
-        conn.commit()
+    for name in SUPPORT_CHANNELS:
+        ch = discord.utils.get(interaction.guild.text_channels, name=name)
 
-        await interaction.message.edit(content="🟢 ANGENOMMEN", view=None)
-        await interaction.response.send_message("Angenommen", ephemeral=True)
+        if ch:
+            overwrite = ch.overwrites_for(interaction.guild.default_role)
+            overwrite.view_channel = False
+            overwrite.send_messages = False
+            await ch.set_permissions(interaction.guild.default_role, overwrite=overwrite)
 
-    @discord.ui.button(label="❌ Ablehnen", style=discord.ButtonStyle.red)
-    async def deny(self, interaction, button):
+    await interaction.response.send_message("🔒 Support geschlossen", ephemeral=True)
 
-        if not is_fuehrung(interaction.user):
-            return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+@bot.tree.command(name="support_öffnen_all")
+async def support_öffnen_all(interaction):
 
-        c.execute("UPDATE bewerbungen SET status='ABGELEHNT' WHERE discord_user=?",
-                  (self.user,))
-        conn.commit()
+    if not is_fuehrung(interaction.user):
+        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
 
-        await interaction.message.edit(content="🔴 ABGELEHNT", view=None)
-        await interaction.response.send_message("Abgelehnt", ephemeral=True)
+    for name in SUPPORT_CHANNELS:
+        ch = discord.utils.get(interaction.guild.text_channels, name=name)
 
-class BewerbungModal(discord.ui.Modal, title="🗳️ Bewerbung"):
+        if ch:
+            overwrite = ch.overwrites_for(interaction.guild.default_role)
+            overwrite.view_channel = True
+            overwrite.send_messages = True
+            await ch.set_permissions(interaction.guild.default_role, overwrite=overwrite)
 
-    roblox_user = discord.ui.TextInput(label="Roblox Name")
-    erfahrung = discord.ui.TextInput(label="Erfahrung")
-    motivation = discord.ui.TextInput(label="Motivation", style=discord.TextStyle.paragraph)
-
-    async def on_submit(self, interaction):
-
-        c.execute("""
-        INSERT INTO bewerbungen (discord_user, roblox_user, motivation, erfahrung)
-        VALUES (?,?,?,?)
-        """, (str(interaction.user), self.roblox_user.value, self.motivation.value, self.erfahrung.value))
-
-        conn.commit()
-
-        channel = discord.utils.get(interaction.guild.text_channels, name="🗳️-𝗡𝗘𝗨𝗘-𝗕𝗘𝗪𝗘𝗥𝗕𝗨𝗡𝗚𝗘𝗡")
-
-        embed = discord.Embed(title="🗳️ NEUE BEWERBUNG", color=discord.Color.orange())
-        embed.add_field(name="User", value=str(interaction.user))
-        embed.add_field(name="Roblox", value=self.roblox_user.value)
-        embed.add_field(name="Erfahrung", value=self.erfahrung.value)
-        embed.add_field(name="Motivation", value=self.motivation.value)
-
-        await channel.send(embed=embed, view=BewerbungActionView(str(interaction.user)))
-
-        await interaction.response.send_message("📨 gesendet", ephemeral=True)
-
-class BewerbungsButton(discord.ui.View):
-
-    @discord.ui.button(label="📝 Bewerben", style=discord.ButtonStyle.green)
-    async def apply(self, interaction, button):
-        await interaction.response.send_modal(BewerbungModal())
-
-@bot.tree.command(name="bewerben")
-async def bewerben(interaction):
-
-    ch = discord.utils.get(interaction.guild.text_channels, name="🗳️-𝗕𝗘𝗪𝗘𝗥𝗕𝗨𝗡𝗚")
-
-    await ch.send("🗳️ Bewerbung starten", view=BewerbungsButton())
-    await interaction.response.send_message("📨 ready", ephemeral=True)
+    await interaction.response.send_message("🟢 Support offen", ephemeral=True)
 
 # =========================
 # READY
@@ -324,9 +305,9 @@ async def on_ready():
     await bot.tree.sync()
     bot.add_view(VerifyView())
     bot.add_view(TicketSystem())
-    print("BOT ONLINE")
+    print("BOT ONLINE | STASI FULL SYSTEM READY")
 
 # =========================
-# RUN
+# START
 # =========================
 bot.run(os.getenv("TOKEN"))

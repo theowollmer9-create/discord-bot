@@ -47,7 +47,6 @@ RANKS = {
     "⚙️ Agent": 3,
     "🔷 Senior Agent": 4,
     "🧬 Ermittler": 5,
-    "👁️ Überwachungseinheit": 5,
     "📍 Leutnant": 6,
     "🗡️ Oberleutnant": 7,
     "🛡️ Hauptmann": 8,
@@ -68,6 +67,18 @@ def get_rank(member: discord.Member):
 
 def has_rank(interaction, rank):
     return get_rank(interaction.user) >= rank
+
+# =========================
+# FÜHRUNG CHECK
+# =========================
+def is_fuehrung(interaction: discord.Interaction):
+    roles = [r.name for r in interaction.user.roles]
+    return any(role in roles for role in [
+        "👑 Minister für Staatssicherheit",
+        "🏛️ Stellv. Minister",
+        "🛡️ Hauptabteilungsleiter",
+        "🏅 Abteilungsleiter"
+    ])
 
 # =========================
 # VALID KENNZEICHEN
@@ -92,13 +103,10 @@ class VerifyView(discord.ui.View):
 
         await interaction.user.add_roles(role)
 
-        await interaction.response.send_message(
-            "✅ Verifiziert → ⚙️ Agent erhalten",
-            ephemeral=True
-        )
+        await interaction.response.send_message("✅ Verifiziert → ⚙️ Agent", ephemeral=True)
 
 # =========================
-# TICKET SYSTEM (MIT KATEGORIE)
+# TICKETS
 # =========================
 class CloseTicket(discord.ui.View):
     @discord.ui.button(label="❌ Schließen", style=discord.ButtonStyle.red)
@@ -110,7 +118,6 @@ class TicketSystem(discord.ui.View):
     async def ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
 
         guild = interaction.guild
-
         category = discord.utils.get(guild.categories, name="🔴 |  TICKETS")
 
         if not category:
@@ -201,7 +208,7 @@ async def kz_eintragen(interaction: discord.Interaction, roblox_user: str, kennz
     kennzeichen = kennzeichen.upper()
 
     if not valid_kz(kennzeichen):
-        return await interaction.response.send_message("❌ AAAA-00", ephemeral=True)
+        return await interaction.response.send_message("❌ Format AAAA-00", ephemeral=True)
 
     try:
         c.execute("""
@@ -244,6 +251,37 @@ async def notruf(interaction: discord.Interaction, user: str, tat: str):
 
     await channel.send(f"🚨 {user}\n{tat}\n{interaction.user.mention}")
     await interaction.response.send_message("🚨 erstellt", ephemeral=True)
+
+# =========================
+# SETUP TICKET (FÜHRUNG NUR)
+# =========================
+@bot.tree.command(name="setup_ticket")
+async def setup_ticket(interaction: discord.Interaction):
+
+    if not is_fuehrung(interaction):
+        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+
+    await interaction.channel.send("🎫 Ticket System", view=TicketSystem())
+    await interaction.response.send_message("✅ Setup erstellt", ephemeral=True)
+
+# =========================
+# SUPPORT SCHLIESSEN
+# =========================
+@bot.tree.command(name="support_schliessen")
+async def support_schliessen(interaction: discord.Interaction):
+
+    if not is_fuehrung(interaction):
+        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+
+    deleted = 0
+
+    for channel in interaction.guild.channels:
+        if isinstance(channel, discord.TextChannel):
+            if channel.name.startswith("support") or "SUPPORT" in channel.name:
+                await channel.delete()
+                deleted += 1
+
+    await interaction.response.send_message(f"🛑 {deleted} Support Räume geschlossen", ephemeral=True)
 
 # =========================
 # READY

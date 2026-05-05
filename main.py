@@ -19,6 +19,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 conn = sqlite3.connect("stasi.db")
 c = conn.cursor()
 
+# 📁 AKTEN
 c.execute("""
 CREATE TABLE IF NOT EXISTS akten (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,6 +28,7 @@ CREATE TABLE IF NOT EXISTS akten (
 )
 """)
 
+# 🚗 KENNZEICHEN
 c.execute("""
 CREATE TABLE IF NOT EXISTS kennzeichen (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -36,263 +38,246 @@ CREATE TABLE IF NOT EXISTS kennzeichen (
 )
 """)
 
+# 👷 ARBEITER AKTEN (PRO)
+c.execute("""
+CREATE TABLE IF NOT EXISTS arbeiter_akten (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT,
+    job TEXT,
+    eintrag TEXT,
+    erstellt_von TEXT,
+    zeit TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+""")
+
+# 🗳️ BEWERBUNGEN
+c.execute("""
+CREATE TABLE IF NOT EXISTS bewerbungen (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    discord_user TEXT,
+    roblox_user TEXT,
+    motivation TEXT,
+    erfahrung TEXT,
+    status TEXT DEFAULT 'OFFEN'
+)
+""")
+
+# 📊 LOGS
+c.execute("""
+CREATE TABLE IF NOT EXISTS logs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user TEXT,
+    action TEXT
+)
+""")
+
 conn.commit()
 
 # =========================
-# SUPPORT CHANNELS
+# ROLES
 # =========================
-SUPPORT_CHANNELS = [
-    "📨・SUPPORT 1",
-    "📨・SUPPORT 2",
-    "📨・SUPPORT 3",
-    "📨・SUPPORT 4",
-    "📨・SUPPORT 5",
-    "📨・SUPPORT 6",
-    "📨・SUPPORT 7",
-    "📨・SUPPORT 8",
-    "📨・SUPPORT 9",
-    "📨・SUPPORT 10",
-]
-
-# =========================
-# RANK CHECK
-# =========================
-def is_fuehrung(member: discord.Member):
-    return any(role.name in [
+def is_fuehrung(member):
+    return any(r.name in [
         "👑 Minister für Staatssicherheit",
         "🏛️ Stellv. Minister",
         "🛡️ Hauptabteilungsleiter",
         "🏅 Abteilungsleiter"
-    ] for role in member.roles)
+    ] for r in member.roles)
 
-def is_agent(member: discord.Member):
-    return discord.utils.get(member.roles, name="⚙️ Agent") is not None
+def is_agent(member):
+    return discord.utils.get(member.roles, name="⚙️ Agent")
+
+# =========================
+# LOG FUNCTION
+# =========================
+def add_log(user, action):
+    c.execute("INSERT INTO logs (user, action) VALUES (?, ?)", (user, action))
+    conn.commit()
 
 # =========================
 # VALID KENNZEICHEN
 # =========================
-def valid_kz(kz: str):
-    return re.fullmatch(r"[A-Z]{4}-\d{2}", kz) is not None
+def valid_kz(kz):
+    return re.fullmatch(r"[A-Z]{4}-\d{2}", kz)
 
 # =========================
-# VERIFIKATION
 # =========================
-class VerifyView(discord.ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @discord.ui.button(label="✅ Verifizieren", style=discord.ButtonStyle.green)
-    async def verify(self, interaction: discord.Interaction, button: discord.ui.Button):
-
-        role = discord.utils.get(interaction.guild.roles, name="⚙️ Agent")
-
-        if not role:
-            return await interaction.response.send_message("❌ Rolle fehlt", ephemeral=True)
-
-        await interaction.user.add_roles(role)
-
-        await interaction.response.send_message("✅ Verifiziert → ⚙️ Agent", ephemeral=True)
-
+# 👷 ARBEITER AKTEN SYSTEM
 # =========================
-# TICKETS
 # =========================
-class CloseTicket(discord.ui.View):
-    @discord.ui.button(label="❌ Schließen", style=discord.ButtonStyle.red)
-    async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.channel.delete()
 
-class TicketSystem(discord.ui.View):
-    @discord.ui.button(label="🎫 Ticket erstellen", style=discord.ButtonStyle.green)
-    async def ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+@bot.tree.command(name="arbeiter_akte_erstellen")
+async def arbeiter_akte_erstellen(interaction, name: str, job: str, eintrag: str):
 
-        guild = interaction.guild
-        category = discord.utils.get(guild.categories, name="🔴 |  TICKETS")
-
-        if not category:
-            return await interaction.response.send_message("❌ Kategorie fehlt", ephemeral=True)
-
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True)
-        }
-
-        channel = await guild.create_text_channel(
-            name=f"ticket-{interaction.user.name}",
-            category=category,
-            overwrites=overwrites
-        )
-
-        await channel.send("🎫 Ticket erstellt", view=CloseTicket())
-        await interaction.response.send_message("✅ Ticket erstellt", ephemeral=True)
-
-# =========================
-# MODERATION
-# =========================
-@bot.tree.command(name="kick")
-async def kick(interaction: discord.Interaction, member: discord.Member, reason: str = "Kein Grund"):
-    if not is_fuehrung(interaction.user):
-        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
-
-    await member.kick(reason=reason)
-    await interaction.response.send_message("👢 gekickt", ephemeral=True)
-
-@bot.tree.command(name="ban")
-async def ban(interaction: discord.Interaction, member: discord.Member, reason: str = "Kein Grund"):
-    if not is_fuehrung(interaction.user):
-        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
-
-    await member.ban(reason=reason)
-    await interaction.response.send_message("🔨 gebannt", ephemeral=True)
-
-@bot.tree.command(name="clear")
-async def clear(interaction: discord.Interaction, amount: int):
     if not is_agent(interaction.user):
         return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
 
-    await interaction.channel.purge(limit=amount)
-    await interaction.response.send_message("🧹 gelöscht", ephemeral=True)
+    c.execute("""
+    INSERT INTO arbeiter_akten (name, job, eintrag, erstellt_von)
+    VALUES (?, ?, ?, ?)
+    """, (name, job, eintrag, str(interaction.user)))
 
-# =========================
-# AKTEN
-# =========================
-@bot.tree.command(name="akte_erstellen")
-async def akte_erstellen(interaction: discord.Interaction, roblox_user: str, tat: str):
-    if not is_agent(interaction.user):
-        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
-
-    c.execute("INSERT INTO akten (roblox_user, tat) VALUES (?, ?)", (roblox_user, tat))
     conn.commit()
 
-    await interaction.response.send_message("📁 Akte erstellt", ephemeral=True)
+    embed = discord.Embed(
+        title="👷‍♂️ ARBEITER-AKTE ERSTELLT",
+        color=discord.Color.green()
+    )
+
+    embed.add_field(name="👤 Name", value=name, inline=False)
+    embed.add_field(name="🧰 Job", value=job, inline=False)
+    embed.add_field(name="📄 Eintrag", value=eintrag, inline=False)
+    embed.set_footer(text="Staatssicherheit | Personalakte")
+
+    await interaction.response.send_message(embed=embed)
 
 # =========================
-# KENNZEICHEN
+# 👷 ARBEITER AKTE ANZEIGEN
 # =========================
-@bot.tree.command(name="kennzeichen_eintragen")
-async def kz_eintragen(interaction: discord.Interaction, roblox_user: str, kennzeichen: str, fahrzeug: str):
+@bot.tree.command(name="arbeiter_akte")
+async def arbeiter_akte(interaction, name: str):
 
     if not is_agent(interaction.user):
         return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
 
-    kennzeichen = kennzeichen.upper()
+    c.execute("""
+    SELECT job, eintrag, erstellt_von, zeit
+    FROM arbeiter_akten
+    WHERE name=?
+    ORDER BY id DESC
+    """, (name,))
+
+    data = c.fetchall()
+
+    embed = discord.Embed(
+        title=f"👷 ARBEITER AKTE | {name}",
+        color=discord.Color.dark_green()
+    )
+
+    if not data:
+        embed.description = "❌ Keine Einträge"
+    else:
+        for i, d in enumerate(data[:5]):
+            embed.add_field(
+                name=f"📌 Eintrag #{i+1}",
+                value=f"🧰 {d[0]}\n📄 {d[1]}\n👮 {d[2]}\n🕒 {d[3]}",
+                inline=False
+            )
+
+    await interaction.response.send_message(embed=embed)
+
+# =========================
+# 📊 ARBEITER STATISTIK
+# =========================
+@bot.tree.command(name="arbeiter_stats")
+async def arbeiter_stats(interaction):
+
+    if not is_fuehrung(interaction.user):
+        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+
+    c.execute("SELECT COUNT(*) FROM arbeiter_akten")
+    total = c.fetchone()[0]
+
+    c.execute("SELECT job, COUNT(*) FROM arbeiter_akten GROUP BY job")
+    jobs = c.fetchall()
+
+    embed = discord.Embed(
+        title="📊 ARBEITER STATISTIK",
+        color=discord.Color.blue()
+    )
+
+    embed.add_field(name="👷 Gesamt Akten", value=str(total), inline=False)
+
+    embed.add_field(
+        name="🧰 Jobs",
+        value="\n".join([f"{j[0]}: {j[1]}" for j in jobs]) or "Keine Daten",
+        inline=False
+    )
+
+    await interaction.response.send_message(embed=embed)
+
+# =========================
+# 📁 NORMALE AKTEN
+# =========================
+@bot.tree.command(name="akte")
+async def akte(interaction, roblox_user: str):
+
+    c.execute("SELECT tat FROM akten WHERE roblox_user=?", (roblox_user,))
+    data = c.fetchall()
+
+    embed = discord.Embed(title=f"📁 AKTE {roblox_user}")
+
+    embed.description = "\n".join([d[0] for d in data]) or "Keine Daten"
+
+    await interaction.response.send_message(embed=embed)
+
+# =========================
+# 🚗 KENNZEICHEN
+# =========================
+@bot.tree.command(name="kennzeichen")
+async def kz(interaction, roblox_user: str, kennzeichen: str, fahrzeug: str):
 
     if not valid_kz(kennzeichen):
         return await interaction.response.send_message("❌ Format AAAA-00", ephemeral=True)
 
-    try:
-        c.execute("INSERT INTO kennzeichen VALUES (NULL, ?, ?, ?)",
-                  (roblox_user, kennzeichen, fahrzeug))
-        conn.commit()
-        await interaction.response.send_message("🚗 gespeichert", ephemeral=True)
+    c.execute("INSERT INTO kennzeichen VALUES (NULL,?,?,?)",
+              (roblox_user, kennzeichen, fahrzeug))
+    conn.commit()
 
-    except:
-        await interaction.response.send_message("❌ existiert", ephemeral=True)
+    await interaction.response.send_message("🚗 gespeichert", ephemeral=True)
 
 # =========================
-# NOTRUF
+# 🚨 NOTRUF MIT ORT
 # =========================
 @bot.tree.command(name="notruf")
-async def notruf(interaction: discord.Interaction, user: str, tat: str):
+async def notruf(interaction, user: str, ort: str, tat: str):
 
-    if not is_agent(interaction.user):
-        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+    ch = await interaction.guild.create_text_channel(f"notruf-{user}")
 
-    channel = await interaction.guild.create_text_channel(f"notruf-{user}")
-    await channel.send(f"🚨 {user}\n{tat}\n{interaction.user.mention}")
+    embed = discord.Embed(
+        title="🚨 NOTRUF",
+        description=f"👤 {user}\n📍 {ort}\n⚖️ {tat}",
+        color=discord.Color.red()
+    )
 
+    await ch.send(embed=embed)
     await interaction.response.send_message("🚨 erstellt", ephemeral=True)
 
 # =========================
-# SETUP TICKET
+# 📊 DASHBOARD
 # =========================
-@bot.tree.command(name="setup_ticket")
-async def setup_ticket(interaction: discord.Interaction):
+@bot.tree.command(name="dashboard")
+async def dashboard(interaction):
 
-    if not is_fuehrung(interaction.user):
-        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+    c.execute("SELECT COUNT(*) FROM akten")
+    akten = c.fetchone()[0]
 
-    await interaction.channel.send("🎫 Ticket System", view=TicketSystem())
-    await interaction.response.send_message("✅ Setup erstellt", ephemeral=True)
+    c.execute("SELECT COUNT(*) FROM kennzeichen")
+    kz = c.fetchone()[0]
 
-# =========================
-# SUPPORT SCHLIESSEN
-# =========================
-@bot.tree.command(name="support_schliessen")
-async def support_schliessen(interaction: discord.Interaction):
+    c.execute("SELECT COUNT(*) FROM arbeiter_akten")
+    worker = c.fetchone()[0]
 
-    if not is_fuehrung(interaction.user):
-        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
-
-    changed = 0
-    for channel in interaction.guild.text_channels:
-        if channel.name in SUPPORT_CHANNELS:
-            await channel.set_permissions(interaction.guild.default_role, view_channel=False)
-            changed += 1
-
-    await interaction.response.send_message(f"🔒 {changed} Support geschlossen", ephemeral=True)
-
-# =========================
-# SUPPORT ÖFFNEN
-# =========================
-@bot.tree.command(name="support_oeffnen")
-async def support_oeffnen(interaction: discord.Interaction):
-
-    if not is_fuehrung(interaction.user):
-        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
-
-    changed = 0
-    for channel in interaction.guild.text_channels:
-        if channel.name in SUPPORT_CHANNELS:
-            await channel.set_permissions(interaction.guild.default_role, view_channel=True)
-            changed += 1
-
-    await interaction.response.send_message(f"🔓 {changed} Support geöffnet", ephemeral=True)
-
-# =========================
-# UPBRANK
-# =========================
-@bot.tree.command(name="upbrank")
-async def upbrank(interaction: discord.Interaction, member: discord.Member, role: discord.Role, reason: str = "Kein Grund"):
-
-    if not is_fuehrung(interaction.user):
-        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
-
-    await member.add_roles(role)
-
-    await interaction.response.send_message(
-        f"📈 {member.mention} befördert zu {role.mention}\n📝 Grund: {reason}",
-        ephemeral=False
+    embed = discord.Embed(
+        title="📡 STASI DASHBOARD",
+        color=discord.Color.dark_red()
     )
 
-# =========================
-# DOWNRANK
-# =========================
-@bot.tree.command(name="downrank")
-async def downrank(interaction: discord.Interaction, member: discord.Member, role: discord.Role, reason: str = "Kein Grund"):
+    embed.add_field(name="📁 Akten", value=akten)
+    embed.add_field(name="🚗 Kennzeichen", value=kz)
+    embed.add_field(name="👷 Arbeiter Akten", value=worker)
 
-    if not is_fuehrung(interaction.user):
-        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
-
-    try:
-        await member.remove_roles(role)
-
-        await interaction.response.send_message(
-            f"📉 {member.mention} degradiert von {role.mention}\n📝 Grund: {reason}",
-            ephemeral=False
-        )
-    except:
-        await interaction.response.send_message("❌ Fehler beim Degradieren", ephemeral=True)
+    await interaction.response.send_message(embed=embed)
 
 # =========================
-# READY
+# 🧠 READY
 # =========================
 @bot.event
 async def on_ready():
     await bot.tree.sync()
-    bot.add_view(VerifyView())
-    bot.add_view(TicketSystem())
-    print("BOT ONLINE")
+    print("BOT ONLINE | STASI SYSTEM ACTIVE")
 
-bot.run(os.getenv("TOKEN"))
-
+# =========================
+# START
+# =========================
 bot.run(os.getenv("TOKEN"))

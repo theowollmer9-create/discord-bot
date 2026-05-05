@@ -15,7 +15,8 @@ EXTENSIONS = [
     "cogs.notruf",
     "cogs.dashboard",
     "cogs.bewerbung",
-    "cogs.admin"
+    "cogs.admin",
+    "cogs.ueberwachung"
 ]
 
 @bot.event

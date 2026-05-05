@@ -39,37 +39,23 @@ CREATE TABLE IF NOT EXISTS kennzeichen (
 conn.commit()
 
 # =========================
-# RANGSYSTEM
+# SUPPORT CHANNELS
 # =========================
-RANKS = {
-    "🔰 Rekrut": 1,
-    "🛡️ Anwärter": 2,
-    "⚙️ Agent": 3,
-    "🔷 Senior Agent": 4,
-    "🧬 Ermittler": 5,
-    "📍 Leutnant": 6,
-    "🗡️ Oberleutnant": 7,
-    "🛡️ Hauptmann": 8,
-    "🛡️ Major": 9,
-    "🛡️ Oberstleutnant": 10,
-    "🛡️ Oberst": 11,
-    "🏅 Abteilungsleiter": 12,
-    "🛡️ Hauptabteilungsleiter": 13,
-    "🏛️ Stellv. Minister": 14,
-    "👑 Minister für Staatssicherheit": 15
-}
-
-def get_rank(member: discord.Member):
-    for role in member.roles:
-        if role.name in RANKS:
-            return RANKS[role.name]
-    return 0
-
-def has_rank(interaction, rank):
-    return get_rank(interaction.user) >= rank
+SUPPORT_CHANNELS = [
+    "📨・SUPPORT 1",
+    "📨・SUPPORT 2",
+    "📨・SUPPORT 3",
+    "📨・SUPPORT 4",
+    "📨・SUPPORT 5",
+    "📨・SUPPORT 6",
+    "📨・SUPPORT 7",
+    "📨・SUPPORT 8",
+    "📨・SUPPORT 9",
+    "📨・SUPPORT 10",
+]
 
 # =========================
-# FÜHRUNG CHECK
+# RANK CHECK
 # =========================
 def is_fuehrung(interaction: discord.Interaction):
     roles = [r.name for r in interaction.user.roles]
@@ -79,6 +65,9 @@ def is_fuehrung(interaction: discord.Interaction):
         "🛡️ Hauptabteilungsleiter",
         "🏅 Abteilungsleiter"
     ])
+
+def is_agent(interaction):
+    return discord.utils.get(interaction.user.roles, name="⚙️ Agent") is not None
 
 # =========================
 # VALID KENNZEICHEN
@@ -144,7 +133,7 @@ class TicketSystem(discord.ui.View):
 @bot.tree.command(name="kick")
 async def kick(interaction: discord.Interaction, member: discord.Member, reason: str = "Kein Grund"):
 
-    if not has_rank(interaction, 8):
+    if not is_fuehrung(interaction):
         return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
 
     await member.kick(reason=reason)
@@ -153,7 +142,7 @@ async def kick(interaction: discord.Interaction, member: discord.Member, reason:
 @bot.tree.command(name="ban")
 async def ban(interaction: discord.Interaction, member: discord.Member, reason: str = "Kein Grund"):
 
-    if not has_rank(interaction, 10):
+    if not is_fuehrung(interaction):
         return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
 
     await member.ban(reason=reason)
@@ -162,7 +151,7 @@ async def ban(interaction: discord.Interaction, member: discord.Member, reason: 
 @bot.tree.command(name="clear")
 async def clear(interaction: discord.Interaction, amount: int):
 
-    if not has_rank(interaction, 3):
+    if not is_agent(interaction):
         return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
 
     await interaction.channel.purge(limit=amount)
@@ -174,7 +163,7 @@ async def clear(interaction: discord.Interaction, amount: int):
 @bot.tree.command(name="akte_erstellen")
 async def akte_erstellen(interaction: discord.Interaction, roblox_user: str, tat: str):
 
-    if not has_rank(interaction, 5):
+    if not is_agent(interaction):
         return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
 
     c.execute("INSERT INTO akten (roblox_user, tat) VALUES (?, ?)", (roblox_user, tat))
@@ -185,7 +174,7 @@ async def akte_erstellen(interaction: discord.Interaction, roblox_user: str, tat
 @bot.tree.command(name="akte_anzeigen")
 async def akte_anzeigen(interaction: discord.Interaction, id: int):
 
-    if not has_rank(interaction, 3):
+    if not is_agent(interaction):
         return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
 
     c.execute("SELECT roblox_user, tat FROM akten WHERE id=?", (id,))
@@ -202,13 +191,13 @@ async def akte_anzeigen(interaction: discord.Interaction, id: int):
 @bot.tree.command(name="kennzeichen_eintragen")
 async def kz_eintragen(interaction: discord.Interaction, roblox_user: str, kennzeichen: str, fahrzeug: str):
 
-    if not has_rank(interaction, 6):
+    if not is_agent(interaction):
         return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
 
     kennzeichen = kennzeichen.upper()
 
     if not valid_kz(kennzeichen):
-        return await interaction.response.send_message("❌ Format AAAA-00", ephemeral=True)
+        return await interaction.response.send_message("❌ AAAA-00", ephemeral=True)
 
     try:
         c.execute("""
@@ -222,29 +211,13 @@ async def kz_eintragen(interaction: discord.Interaction, roblox_user: str, kennz
     except sqlite3.IntegrityError:
         await interaction.response.send_message("❌ existiert", ephemeral=True)
 
-@bot.tree.command(name="kennzeichen_abfragen")
-async def kz_abfragen(interaction: discord.Interaction, kennzeichen: str):
-
-    if not has_rank(interaction, 3):
-        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
-
-    kennzeichen = kennzeichen.upper()
-
-    c.execute("SELECT roblox_user, fahrzeug FROM kennzeichen WHERE kennzeichen=?", (kennzeichen,))
-    r = c.fetchone()
-
-    if not r:
-        return await interaction.response.send_message("❌ nicht gefunden", ephemeral=True)
-
-    await interaction.response.send_message(f"🚗 {kennzeichen} | {r[0]} | {r[1]}")
-
 # =========================
 # NOTRUF
 # =========================
 @bot.tree.command(name="notruf")
 async def notruf(interaction: discord.Interaction, user: str, tat: str):
 
-    if not has_rank(interaction, 3):
+    if not is_agent(interaction):
         return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
 
     channel = await interaction.guild.create_text_channel(f"notruf-{user}")
@@ -253,7 +226,7 @@ async def notruf(interaction: discord.Interaction, user: str, tat: str):
     await interaction.response.send_message("🚨 erstellt", ephemeral=True)
 
 # =========================
-# SETUP TICKET (FÜHRUNG NUR)
+# SETUP TICKET (FÜHRUNG)
 # =========================
 @bot.tree.command(name="setup_ticket")
 async def setup_ticket(interaction: discord.Interaction):
@@ -265,7 +238,7 @@ async def setup_ticket(interaction: discord.Interaction):
     await interaction.response.send_message("✅ Setup erstellt", ephemeral=True)
 
 # =========================
-# SUPPORT SCHLIESSEN
+# 🔒 SUPPORT SCHLIESSEN
 # =========================
 @bot.tree.command(name="support_schliessen")
 async def support_schliessen(interaction: discord.Interaction):
@@ -273,15 +246,42 @@ async def support_schliessen(interaction: discord.Interaction):
     if not is_fuehrung(interaction):
         return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
 
-    deleted = 0
+    guild = interaction.guild
+    changed = 0
 
-    for channel in interaction.guild.channels:
-        if isinstance(channel, discord.TextChannel):
-            if channel.name.startswith("support") or "SUPPORT" in channel.name:
-                await channel.delete()
-                deleted += 1
+    for channel in guild.text_channels:
+        if channel.name in SUPPORT_CHANNELS:
 
-    await interaction.response.send_message(f"🛑 {deleted} Support Räume geschlossen", ephemeral=True)
+            await channel.set_permissions(guild.default_role, view_channel=False)
+            changed += 1
+
+    await interaction.response.send_message(
+        f"🔒 {changed} SUPPORT-RÄUME geschlossen",
+        ephemeral=True
+    )
+
+# =========================
+# 🔓 SUPPORT ÖFFNEN
+# =========================
+@bot.tree.command(name="support_oeffnen")
+async def support_oeffnen(interaction: discord.Interaction):
+
+    if not is_fuehrung(interaction):
+        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+
+    guild = interaction.guild
+    changed = 0
+
+    for channel in guild.text_channels:
+        if channel.name in SUPPORT_CHANNELS:
+
+            await channel.set_permissions(guild.default_role, view_channel=True)
+            changed += 1
+
+    await interaction.response.send_message(
+        f"🔓 {changed} SUPPORT-RÄUME geöffnet",
+        ephemeral=True
+    )
 
 # =========================
 # READY

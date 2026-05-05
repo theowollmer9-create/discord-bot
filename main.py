@@ -1,14 +1,22 @@
 import discord
 from discord.ext import commands
-from discord import app_commands
 import sqlite3
+import re
+import os
 
-# ===== BOT SETUP =====
+# =========================
+# BOT SETUP
+# =========================
 intents = discord.Intents.default()
+intents.members = True
+intents.message_content = True
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ===== DATABASE =====
-conn = sqlite3.connect("bot.db")
+# =========================
+# DATABASE
+# =========================
+conn = sqlite3.connect("stasi.db")
 c = conn.cursor()
 
 c.execute("""
@@ -18,32 +26,80 @@ CREATE TABLE IF NOT EXISTS akten (
     tat TEXT
 )
 """)
+
+c.execute("""
+CREATE TABLE IF NOT EXISTS kennzeichen (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    roblox_user TEXT,
+    kennzeichen TEXT UNIQUE,
+    fahrzeug TEXT
+)
+""")
+
 conn.commit()
 
-# ===== ROLE CHECKS =====
-def is_agent(interaction):
-    return discord.utils.get(interaction.user.roles, name="⚙️ Agent") is not None
+# =========================
+# RANGSYSTEM
+# =========================
+RANKS = {
+    "🔰 Rekrut": 1,
+    "🛡️ Anwärter": 2,
+    "⚙️ Agent": 3,
+    "🔷 Senior Agent": 4,
+    "🧬 Ermittler": 5,
+    "👁️ Überwachungseinheit": 5,
+    "📍 Leutnant": 6,
+    "🗡️ Oberleutnant": 7,
+    "🛡️ Hauptmann": 8,
+    "🛡️ Major": 9,
+    "🛡️ Oberstleutnant": 10,
+    "🛡️ Oberst": 11,
+    "🏅 Abteilungsleiter": 12,
+    "🛡️ Hauptabteilungsleiter": 13,
+    "🏛️ Stellv. Minister": 14,
+    "👑 Minister für Staatssicherheit": 15
+}
 
-def is_minister(interaction):
-    return discord.utils.get(interaction.user.roles, name="👑 Minister für Staatssicherheit") is not None
+def get_rank(member: discord.Member):
+    for role in member.roles:
+        if role.name in RANKS:
+            return RANKS[role.name]
+    return 0
 
-# ===== VERIFY UI =====
+def has_rank(interaction, rank):
+    return get_rank(interaction.user) >= rank
+
+# =========================
+# VALID KENNZEICHEN
+# =========================
+def valid_kz(kz: str):
+    return re.fullmatch(r"[A-Z]{4}-\d{2}", kz) is not None
+
+# =========================
+# VERIFIKATION
+# =========================
 class VerifyView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
     @discord.ui.button(label="✅ Verifizieren", style=discord.ButtonStyle.green)
     async def verify(self, interaction: discord.Interaction, button: discord.ui.Button):
+
         role = discord.utils.get(interaction.guild.roles, name="⚙️ Agent")
 
-        if role is None:
-            await interaction.response.send_message("❌ Rolle fehlt!", ephemeral=True)
-            return
+        if not role:
+            return await interaction.response.send_message("❌ Rolle fehlt", ephemeral=True)
 
         await interaction.user.add_roles(role)
-        await interaction.response.send_message("✅ Du bist jetzt verifiziert!", ephemeral=True)
 
-# ===== TICKET UI =====
+        await interaction.response.send_message(
+            "✅ Verifiziert → ⚙️ Agent erhalten",
+            ephemeral=True
+        )
+
+# =========================
+# TICKET SYSTEM (MIT KATEGORIE)
+# =========================
 class CloseTicket(discord.ui.View):
     @discord.ui.button(label="❌ Schließen", style=discord.ButtonStyle.red)
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -55,161 +111,148 @@ class TicketSystem(discord.ui.View):
 
         guild = interaction.guild
 
+        category = discord.utils.get(guild.categories, name="🔴 |  TICKETS")
+
+        if not category:
+            return await interaction.response.send_message("❌ Kategorie fehlt", ephemeral=True)
+
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            interaction.user: discord.PermissionOverwrite(view_channel=True)
+            interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True)
         }
 
         channel = await guild.create_text_channel(
-            f"ticket-{interaction.user.name}",
+            name=f"ticket-{interaction.user.name}",
+            category=category,
             overwrites=overwrites
         )
 
         await channel.send("🎫 Ticket erstellt", view=CloseTicket())
-        await interaction.response.send_message("Ticket erstellt!", ephemeral=True)
 
-# ===== READY =====
+        await interaction.response.send_message("✅ Ticket erstellt", ephemeral=True)
+
+# =========================
+# MODERATION
+# =========================
+@bot.tree.command(name="kick")
+async def kick(interaction: discord.Interaction, member: discord.Member, reason: str = "Kein Grund"):
+
+    if not has_rank(interaction, 8):
+        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+
+    await member.kick(reason=reason)
+    await interaction.response.send_message("👢 gekickt", ephemeral=True)
+
+@bot.tree.command(name="ban")
+async def ban(interaction: discord.Interaction, member: discord.Member, reason: str = "Kein Grund"):
+
+    if not has_rank(interaction, 10):
+        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+
+    await member.ban(reason=reason)
+    await interaction.response.send_message("🔨 gebannt", ephemeral=True)
+
+@bot.tree.command(name="clear")
+async def clear(interaction: discord.Interaction, amount: int):
+
+    if not has_rank(interaction, 3):
+        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+
+    await interaction.channel.purge(limit=amount)
+    await interaction.response.send_message("🧹 gelöscht", ephemeral=True)
+
+# =========================
+# AKTEN
+# =========================
+@bot.tree.command(name="akte_erstellen")
+async def akte_erstellen(interaction: discord.Interaction, roblox_user: str, tat: str):
+
+    if not has_rank(interaction, 5):
+        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+
+    c.execute("INSERT INTO akten (roblox_user, tat) VALUES (?, ?)", (roblox_user, tat))
+    conn.commit()
+
+    await interaction.response.send_message("📁 Akte erstellt", ephemeral=True)
+
+@bot.tree.command(name="akte_anzeigen")
+async def akte_anzeigen(interaction: discord.Interaction, id: int):
+
+    if not has_rank(interaction, 3):
+        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+
+    c.execute("SELECT roblox_user, tat FROM akten WHERE id=?", (id,))
+    r = c.fetchone()
+
+    if not r:
+        return await interaction.response.send_message("❌ nicht gefunden", ephemeral=True)
+
+    await interaction.response.send_message(f"📁 {r[0]} | {r[1]}")
+
+# =========================
+# KENNZEICHEN
+# =========================
+@bot.tree.command(name="kennzeichen_eintragen")
+async def kz_eintragen(interaction: discord.Interaction, roblox_user: str, kennzeichen: str, fahrzeug: str):
+
+    if not has_rank(interaction, 6):
+        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+
+    kennzeichen = kennzeichen.upper()
+
+    if not valid_kz(kennzeichen):
+        return await interaction.response.send_message("❌ AAAA-00", ephemeral=True)
+
+    try:
+        c.execute("""
+        INSERT INTO kennzeichen (roblox_user, kennzeichen, fahrzeug)
+        VALUES (?, ?, ?)
+        """, (roblox_user, kennzeichen, fahrzeug))
+
+        conn.commit()
+        await interaction.response.send_message("🚗 gespeichert", ephemeral=True)
+
+    except sqlite3.IntegrityError:
+        await interaction.response.send_message("❌ existiert", ephemeral=True)
+
+@bot.tree.command(name="kennzeichen_abfragen")
+async def kz_abfragen(interaction: discord.Interaction, kennzeichen: str):
+
+    if not has_rank(interaction, 3):
+        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+
+    kennzeichen = kennzeichen.upper()
+
+    c.execute("SELECT roblox_user, fahrzeug FROM kennzeichen WHERE kennzeichen=?", (kennzeichen,))
+    r = c.fetchone()
+
+    if not r:
+        return await interaction.response.send_message("❌ nicht gefunden", ephemeral=True)
+
+    await interaction.response.send_message(f"🚗 {kennzeichen} | {r[0]} | {r[1]}")
+
+# =========================
+# NOTRUF
+# =========================
+@bot.tree.command(name="notruf")
+async def notruf(interaction: discord.Interaction, user: str, tat: str):
+
+    if not has_rank(interaction, 3):
+        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+
+    channel = await interaction.guild.create_text_channel(f"notruf-{user}")
+
+    await channel.send(f"🚨 {user}\n{tat}\n{interaction.user.mention}")
+    await interaction.response.send_message("🚨 erstellt", ephemeral=True)
+
+# =========================
+# READY
+# =========================
 @bot.event
 async def on_ready():
     await bot.tree.sync()
     bot.add_view(VerifyView())
     bot.add_view(TicketSystem())
-    bot.add_view(CloseTicket())
-    print(f"Bot online: {bot.user}")
+    print("BOT ONLINE")
 
-# ===== VERIFY SETUP =====
-@bot.tree.command(name="verify_setup")
-async def verify_setup(interaction: discord.Interaction):
-
-    if not is_minister(interaction):
-        await interaction.response.send_message("❌ Nur Minister darf das!", ephemeral=True)
-        return
-
-    embed = discord.Embed(
-        title="🔐 Verifizierung",
-        description="Bitte klicke auf den Button, um dich zu verifizieren.",
-        color=discord.Color.green()
-    )
-
-    await interaction.channel.send(embed=embed, view=VerifyView())
-    await interaction.response.send_message("✅ Verify Panel erstellt", ephemeral=True)
-
-# ===== TICKET SETUP =====
-@bot.tree.command(name="setup_ticket")
-async def setup_ticket(interaction: discord.Interaction):
-
-    if not is_minister(interaction):
-        await interaction.response.send_message("❌ Nur Minister darf das!", ephemeral=True)
-        return
-
-    await interaction.channel.send("🎫 Ticket System", view=TicketSystem())
-    await interaction.response.send_message("✅ Ticket Setup fertig", ephemeral=True)
-
-# ===== AKTE ERSTELLEN =====
-@bot.tree.command(name="akte_erstellen")
-async def akte_erstellen(interaction: discord.Interaction, roblox_user: str, tat: str):
-
-    if not is_agent(interaction):
-        await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
-        return
-
-    c.execute("INSERT INTO akten (roblox_user, tat) VALUES (?, ?)", (roblox_user, tat))
-    conn.commit()
-
-    case_id = c.lastrowid
-
-    embed = discord.Embed(
-        title="📁 Akte erstellt",
-        description=f"🆔 {case_id}\n🎮 {roblox_user}\n⚖️ {tat}",
-        color=discord.Color.blue()
-    )
-
-    await interaction.response.send_message(embed=embed, ephemeral=True)
-
-# ===== AKTE ANZEIGEN =====
-@bot.tree.command(name="akte_anzeigen")
-async def akte_anzeigen(interaction: discord.Interaction, fall_id: int):
-
-    if not is_agent(interaction):
-        await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
-        return
-
-    c.execute("SELECT roblox_user, tat FROM akten WHERE id=?", (fall_id,))
-    result = c.fetchone()
-
-    if not result:
-        await interaction.response.send_message("❌ Nicht gefunden", ephemeral=True)
-        return
-
-    roblox_user, tat = result
-
-    embed = discord.Embed(
-        title=f"📁 Akte #{fall_id}",
-        description=f"🎮 {roblox_user}\n⚖️ {tat}",
-        color=discord.Color.dark_blue()
-    )
-
-    await interaction.response.send_message(embed=embed)
-
-# ===== AKTE SUCHEN =====
-@bot.tree.command(name="akte_suchen")
-async def akte_suchen(interaction: discord.Interaction, roblox_user: str):
-
-    if not is_agent(interaction):
-        await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
-        return
-
-    c.execute("SELECT id, tat FROM akten WHERE roblox_user LIKE ?", (f"%{roblox_user}%",))
-    results = c.fetchall()
-
-    if not results:
-        await interaction.response.send_message("❌ Keine Ergebnisse", ephemeral=True)
-        return
-
-    text = ""
-    for cid, tat in results:
-        text += f"🆔 {cid} | ⚖️ {tat}\n"
-
-    embed = discord.Embed(
-        title=f"🔍 Suche: {roblox_user}",
-        description=text,
-        color=discord.Color.orange()
-    )
-
-    await interaction.response.send_message(embed=embed)
-
-# ===== AKTE LÖSCHEN =====
-@bot.tree.command(name="akte_loeschen")
-async def akte_loeschen(interaction: discord.Interaction, fall_id: int):
-
-    if not is_agent(interaction):
-        await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
-        return
-
-    c.execute("DELETE FROM akten WHERE id=?", (fall_id,))
-    conn.commit()
-
-    await interaction.response.send_message(f"🗑 Akte #{fall_id} gelöscht", ephemeral=True)
-
-# ===== NOTRUF =====
-@bot.tree.command(name="notruf")
-async def notruf(interaction: discord.Interaction, roblox_user: str, tat: str):
-
-    if not is_agent(interaction):
-        await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
-        return
-
-    channel = await interaction.guild.create_text_channel(f"notruf-{roblox_user}")
-
-    embed = discord.Embed(
-        title="🚨 NOTRUF",
-        description=f"🎮 {roblox_user}\n⚖️ {tat}\n👤 {interaction.user.mention}",
-        color=discord.Color.red()
-    )
-
-    await channel.send(embed=embed)
-    await interaction.response.send_message("🚨 Notruf erstellt", ephemeral=True)
-
-# ===== START =====
-import os
 bot.run(os.getenv("TOKEN"))

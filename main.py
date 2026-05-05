@@ -52,7 +52,7 @@ status TEXT DEFAULT 'OFFEN'
 conn.commit()
 
 # =========================
-# ROLES
+# ROLES CHECK
 # =========================
 def is_fuehrung(member):
     return any(r.name in [
@@ -80,7 +80,7 @@ def valid_kz(kz):
     return re.fullmatch(r"[A-Z]{4}-\d{2}", kz)
 
 # =========================
-# VERIFY (JEDER DARF)
+# VERIFY SYSTEM
 # =========================
 class VerifyView(discord.ui.View):
     def __init__(self):
@@ -124,46 +124,6 @@ class TicketSystem(discord.ui.View):
         await interaction.response.send_message("Erstellt", ephemeral=True)
 
 # =========================
-# BEWERBUNG MODAL
-# =========================
-class BewerbungModal(discord.ui.Modal, title="🗳️ Bewerbung"):
-
-    roblox_user = discord.ui.TextInput(label="Roblox Name")
-    erfahrung = discord.ui.TextInput(label="RP Erfahrung")
-    motivation = discord.ui.TextInput(label="Motivation", style=discord.TextStyle.paragraph)
-
-    async def on_submit(self, interaction):
-
-        c.execute("""
-        INSERT INTO bewerbungen (discord_user, roblox_user, motivation, erfahrung)
-        VALUES (?,?,?,?)
-        """, (
-            str(interaction.user),
-            self.roblox_user.value,
-            self.motivation.value,
-            self.erfahrung.value
-        ))
-
-        conn.commit()
-
-        channel = discord.utils.get(interaction.guild.text_channels, name="🗳️-𝗡𝗘𝗨𝗘-𝗕𝗘𝗪𝗘𝗥𝗕𝗨𝗡𝗚𝗘𝗡")
-
-        embed = discord.Embed(title="🗳️ NEUE BEWERBUNG", color=discord.Color.orange())
-        embed.add_field(name="User", value=str(interaction.user))
-        embed.add_field(name="Roblox", value=self.roblox_user.value)
-        embed.add_field(name="Erfahrung", value=self.erfahrung.value)
-        embed.add_field(name="Motivation", value=self.motivation.value)
-
-        await channel.send(embed=embed)
-
-        await interaction.response.send_message("📨 gesendet", ephemeral=True)
-
-class BewerbungsButton(discord.ui.View):
-    @discord.ui.button(label="📝 Bewerben", style=discord.ButtonStyle.green)
-    async def apply(self, interaction, button):
-        await interaction.response.send_modal(BewerbungModal())
-
-# =========================
 # AKTEN
 # =========================
 @bot.tree.command(name="akte")
@@ -178,38 +138,42 @@ async def akte(interaction, roblox_user: str):
     await interaction.response.send_message(embed=embed)
 
 # =========================
-# ARBEITER AKTE
-# =========================
-@bot.tree.command(name="arbeiter_akte")
-async def arbeiter(interaction, name: str):
-
-    c.execute("SELECT job, eintrag, erstellt_von FROM arbeiter_akten WHERE name=?", (name,))
-    data = c.fetchall()
-
-    embed = discord.Embed(title=f"👷 ARBEITER {name}", color=discord.Color.green())
-
-    for d in data:
-        embed.add_field(name=d[0], value=f"{d[1]} | {d[2]}", inline=False)
-
-    await interaction.response.send_message(embed=embed)
-
-# =========================
 # KENNZEICHEN
 # =========================
 @bot.tree.command(name="kennzeichen")
-async def kz(interaction, roblox_user: str, kennzeichen: str, fahrzeug: str):
+async def kennzeichen(interaction, roblox_user: str, kz: str, fahrzeug: str):
 
-    if not valid_kz(kennzeichen):
-        return await interaction.response.send_message("❌ AAAA-00", ephemeral=True)
+    kz = kz.upper()
+
+    if not valid_kz(kz):
+        return await interaction.response.send_message("❌ AAAA-00 Format!", ephemeral=True)
 
     c.execute("INSERT INTO kennzeichen VALUES (NULL,?,?,?)",
-              (roblox_user, kennzeichen, fahrzeug))
+              (roblox_user, kz, fahrzeug))
     conn.commit()
 
     await interaction.response.send_message("🚗 gespeichert", ephemeral=True)
 
 # =========================
-# NOTRUF MIT ORT
+# ARBEITER AKTE
+# =========================
+@bot.tree.command(name="arbeiter_akte")
+async def arbeiter(interaction, name: str, job: str, eintrag: str):
+
+    if not is_agent(interaction.user):
+        return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+
+    c.execute("""
+    INSERT INTO arbeiter_akten (name, job, eintrag, erstellt_von)
+    VALUES (?,?,?,?)
+    """, (name, job, eintrag, str(interaction.user)))
+
+    conn.commit()
+
+    await interaction.response.send_message("👷 erstellt", ephemeral=True)
+
+# =========================
+# NOTRUF
 # =========================
 @bot.tree.command(name="notruf")
 async def notruf(interaction, user: str, ort: str, tat: str):
@@ -249,7 +213,7 @@ async def dashboard(interaction):
     await interaction.response.send_message(embed=embed)
 
 # =========================
-# STRAFKATALOG CHANNEL
+# STRAFKATALOG
 # =========================
 @bot.tree.command(name="kanal_erstellen")
 async def kanal(interaction):
@@ -258,7 +222,7 @@ async def kanal(interaction):
 
     embed = discord.Embed(
         title="𝗦𝗧𝗥𝗔𝗙 𝗞𝗔𝗧𝗔𝗟𝗢𝗚 ⚖️",
-        description="🟢 Verwarnung\n🟡 Strafe\n🔴 Haft\n⚫ Staatsfeind",
+        description="🟢 Verwarnung\n🟡 Geldstrafe\n🔴 Haft\n⚫ Staatsfeind",
         color=discord.Color.orange()
     )
 
@@ -267,14 +231,89 @@ async def kanal(interaction):
     await interaction.response.send_message("📜 erstellt", ephemeral=True)
 
 # =========================
-# BEWERBEN START
 # =========================
+# 🗳️ BEWERBUNG SYSTEM MIT BUTTONS
+# =========================
+# =========================
+
+class BewerbungActionView(discord.ui.View):
+
+    def __init__(self, user):
+        super().__init__()
+        self.user = user
+
+    @discord.ui.button(label="✅ Annehmen", style=discord.ButtonStyle.green)
+    async def accept(self, interaction, button):
+
+        if not is_fuehrung(interaction.user):
+            return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+
+        role = discord.utils.get(interaction.guild.roles, name="⚙️ Agent")
+
+        member = discord.utils.get(interaction.guild.members, name=self.user)
+
+        if member:
+            await member.add_roles(role)
+
+        c.execute("UPDATE bewerbungen SET status='ANGENOMMEN' WHERE discord_user=?",
+                  (self.user,))
+        conn.commit()
+
+        await interaction.message.edit(content="🟢 ANGENOMMEN", view=None)
+        await interaction.response.send_message("Angenommen", ephemeral=True)
+
+    @discord.ui.button(label="❌ Ablehnen", style=discord.ButtonStyle.red)
+    async def deny(self, interaction, button):
+
+        if not is_fuehrung(interaction.user):
+            return await interaction.response.send_message("❌ Keine Rechte", ephemeral=True)
+
+        c.execute("UPDATE bewerbungen SET status='ABGELEHNT' WHERE discord_user=?",
+                  (self.user,))
+        conn.commit()
+
+        await interaction.message.edit(content="🔴 ABGELEHNT", view=None)
+        await interaction.response.send_message("Abgelehnt", ephemeral=True)
+
+class BewerbungModal(discord.ui.Modal, title="🗳️ Bewerbung"):
+
+    roblox_user = discord.ui.TextInput(label="Roblox Name")
+    erfahrung = discord.ui.TextInput(label="Erfahrung")
+    motivation = discord.ui.TextInput(label="Motivation", style=discord.TextStyle.paragraph)
+
+    async def on_submit(self, interaction):
+
+        c.execute("""
+        INSERT INTO bewerbungen (discord_user, roblox_user, motivation, erfahrung)
+        VALUES (?,?,?,?)
+        """, (str(interaction.user), self.roblox_user.value, self.motivation.value, self.erfahrung.value))
+
+        conn.commit()
+
+        channel = discord.utils.get(interaction.guild.text_channels, name="🗳️-𝗡𝗘𝗨𝗘-𝗕𝗘𝗪𝗘𝗥𝗕𝗨𝗡𝗚𝗘𝗡")
+
+        embed = discord.Embed(title="🗳️ NEUE BEWERBUNG", color=discord.Color.orange())
+        embed.add_field(name="User", value=str(interaction.user))
+        embed.add_field(name="Roblox", value=self.roblox_user.value)
+        embed.add_field(name="Erfahrung", value=self.erfahrung.value)
+        embed.add_field(name="Motivation", value=self.motivation.value)
+
+        await channel.send(embed=embed, view=BewerbungActionView(str(interaction.user)))
+
+        await interaction.response.send_message("📨 gesendet", ephemeral=True)
+
+class BewerbungsButton(discord.ui.View):
+
+    @discord.ui.button(label="📝 Bewerben", style=discord.ButtonStyle.green)
+    async def apply(self, interaction, button):
+        await interaction.response.send_modal(BewerbungModal())
+
 @bot.tree.command(name="bewerben")
 async def bewerben(interaction):
 
     ch = discord.utils.get(interaction.guild.text_channels, name="🗳️-𝗕𝗘𝗪𝗘𝗥𝗕𝗨𝗡𝗚")
-    await ch.send("🗳️ Bewerbung starten", view=BewerbungsButton())
 
+    await ch.send("🗳️ Bewerbung starten", view=BewerbungsButton())
     await interaction.response.send_message("📨 ready", ephemeral=True)
 
 # =========================
@@ -288,6 +327,6 @@ async def on_ready():
     print("BOT ONLINE")
 
 # =========================
-# START
+# RUN
 # =========================
 bot.run(os.getenv("TOKEN"))
